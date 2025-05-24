@@ -1,0 +1,198 @@
+import yfinance as yf
+import numpy as np
+import matplotlib.pyplot as plt
+from sklearn.linear_model import LinearRegression
+from datetime import datetime
+import pandas as pd
+
+
+# Define the cryptocurrency ticker and the fiat currency
+TICKER = 'BTC-USD'
+# Define the start date for fetching historical data
+START_DATE = "2022-11-22"
+# Get today's date in YYYY-MM-DD format for the end date
+END_DATE = datetime.today().strftime('%Y-%m-%d')
+
+def fetch_crypto_data(ticker, start_date, end_date):
+    """
+    Fetches historical cryptocurrency data from Yahoo Finance.
+
+    Args:
+        ticker (str): The ticker symbol for the cryptocurrency (e.g., 'BTC-USD').
+        start_date (str): The start date for the data in 'YYYY-MM-DD' format.
+        end_date (str): The end date for the data in 'YYYY-MM-DD' format.
+
+    Returns:
+        pandas.DataFrame: A DataFrame containing the historical data (Date, Open, High, Low, Close, Volume),
+                          or an empty DataFrame if data fetching fails.
+    """
+    try:
+        # Suppress yfinance informational messages about auto_adjust if desired,
+        # though the default True for auto_adjust is generally good.
+        data = yf.download(ticker, start=start_date, end=end_date, progress=True) # progress=True is default
+        if data.empty:
+            print(f"No data found for {ticker} between {start_date} and {end_date}.")
+            print("This could be due to an incorrect ticker, date range, or an issue with yfinance/network.")
+        return data
+    except Exception as e:
+        print(f"Error fetching data for {ticker}: {e}")
+        return pd.DataFrame() # Return an empty DataFrame on error
+
+def prepare_data_for_regression(df):
+    """
+    Prepares the fetched cryptocurrency data for linear regression.
+    Adds a 'Days' column representing the time elapsed since the first data point.
+
+    Args:
+        df (pandas.DataFrame): DataFrame with historical crypto data, must include a 'Date' index and 'Close' column.
+
+    Returns:
+        tuple: (pandas.DataFrame, numpy.ndarray, numpy.ndarray)
+               - The DataFrame with an added 'Days' column.
+               - X (numpy.ndarray): Independent variable (Days), reshaped for scikit-learn.
+               - y (numpy.ndarray): Dependent variable (Closing Price).
+               Returns (None, None, None) if input DataFrame is unsuitable.
+    """
+    if df.empty or 'Close' not in df.columns:
+        print("DataFrame is empty or 'Close' column is missing. Cannot prepare data.")
+        return None, None, None
+
+    # Reset index to make 'Date' a column if it's the index
+    data_prepared = df.reset_index()
+    
+    # Ensure 'Date' column is in datetime format
+    if 'Date' not in data_prepared.columns:
+        # This case should ideally not happen if yf.download returns a standard DataFrame
+        print("Critical error: 'Date' column not found after reset_index(). Check yfinance output.")
+        return None, None, None
+        
+    data_prepared['Date'] = pd.to_datetime(data_prepared['Date'])
+
+    # Create a numerical 'Days' feature (time)
+    # This represents the number of days since the start of the dataset
+    data_prepared['Days'] = (data_prepared['Date'] - data_prepared['Date'].min()).dt.days
+
+    # X: Independent variable (Time in days)
+    # We need to reshape it to be a 2D array for scikit-learn (n_samples, n_features)
+    X = data_prepared['Days'].values.reshape(-1, 1)
+
+    # y: Dependent variable (Closing Price)
+    y = data_prepared['Close'].values
+    
+    return data_prepared, X, y
+
+def train_linear_regression_model(X, y):
+    """
+    Trains a linear regression model.
+
+    Args:
+        X (numpy.ndarray): Independent variable(s).
+        y (numpy.ndarray): Dependent variable.
+
+    Returns:
+        sklearn.linear_model.LinearRegression: The trained linear regression model.
+    """
+    model = LinearRegression()
+    model.fit(X, y)
+    return model
+
+def plot_regression(df_prepared, y_actual, y_predicted, ticker, start_date, end_date, slope_scalar, intercept_scalar):
+    """
+    Plots the actual Bitcoin prices and the linear regression line.
+
+    Args:
+        df_prepared (pandas.DataFrame): DataFrame containing 'Date' column for plotting.
+        y_actual (numpy.ndarray): The actual closing prices.
+        y_predicted (numpy.ndarray): The prices predicted by the linear regression model.
+        ticker (str): The cryptocurrency ticker.
+        start_date (str): The start date of the data.
+        end_date (str): The end date of the data.
+        slope_scalar (float): The scalar slope of the regression line.
+        intercept_scalar (float): The scalar intercept of the regression line.
+    """
+    plt.figure(figsize=(14, 7)) # Adjusted figure size for better readability
+
+    # Scatter plot for the actual data points
+    plt.scatter(df_prepared['Date'], y_actual, color='deepskyblue', label=f'Actual {ticker} Price', alpha=0.6, s=15)
+
+    # Line plot for the linear regression model's predictions
+    plt.plot(df_prepared['Date'], y_predicted, color='red', linewidth=2.5, label='Linear Regression Line')
+
+    plt.title(f'{ticker} Price Linear Regression\n({start_date} to {end_date})', fontsize=16)
+    plt.xlabel('Date', fontsize=12)
+    plt.ylabel('Price (USD)', fontsize=12)
+    plt.legend(fontsize=10)
+    plt.grid(True, linestyle='--', alpha=0.7) # Added grid for better visual analysis
+    
+    # Improve date formatting on x-axis
+    plt.xticks(rotation=45, ha="right")
+    plt.tight_layout() # Adjust layout to ensure everything fits without overlapping
+
+    # Display model equation on the plot using scalar values for slope and intercept
+    equation_text = f'Model: Price = ${slope_scalar:,.2f} \\times Days + ${intercept_scalar:,.2f}'
+    plt.text(0.02, 0.95, equation_text, transform=plt.gca().transAxes, fontsize=10,
+             verticalalignment='top', bbox=dict(boxstyle='round,pad=0.5', fc='wheat', alpha=0.5))
+
+    plt.show()
+
+def main():
+    """
+    Main function to run the Bitcoin linear regression analysis.
+    """
+    print(f"Fetching {TICKER} data from {START_DATE} to {END_DATE}...")
+    btc_hist_data = fetch_crypto_data(TICKER, START_DATE, END_DATE)
+
+    if btc_hist_data.empty:
+        print(f"Could not retrieve data for {TICKER}. Exiting.")
+        return
+
+    print("Preparing data for regression...")
+    data_prepared, X, y = prepare_data_for_regression(btc_hist_data)
+
+    if data_prepared is None or X is None or y is None:
+        print("Failed to prepare data. Exiting.")
+        return
+
+    # Ensure there's enough data to train
+    if len(X) < 2: # Linear regression needs at least 2 points
+        print("Not enough data points to perform linear regression. Need at least 2.")
+        return
+
+    print("Training linear regression model...")
+    model = train_linear_regression_model(X, y)
+
+    # Make predictions using the trained model
+    y_pred = model.predict(X)
+
+    # Get the slope (coefficient) and intercept of the linear model
+    # Ensure they are Python floats for formatting
+    slope_scalar = float(model.coef_[0])
+    # model.intercept_ is usually a scalar (numpy.float64) for single target regression,
+    # but casting to float() is a safe measure.
+    intercept_scalar = float(model.intercept_) 
+
+    print("\n--- Linear Regression Model Results ---")
+    print(f"Slope (average price change per day): ${slope_scalar:,.2f}")
+    print(f"Intercept (estimated starting price at Day 0): ${intercept_scalar:,.2f}")
+    # Using the scalar versions for the equation string as well
+    print(f"The model equation is: Price = {slope_scalar:.2f} * Days + {intercept_scalar:.2f}")
+    
+    # Calculate R-squared value (Coefficient of Determination)
+    # This tells us how well the linear regression line fits the data
+    # 1.0 is a perfect fit, 0.0 means the model explains none of the variability
+    r_squared = model.score(X, y)
+    print(f"R-squared value: {r_squared:.4f}") # R-squared is a float, formats fine
+    if r_squared < 0.5:
+        print("Note: The R-squared value is relatively low, indicating the linear model may not be a strong fit for this volatile data.")
+    elif r_squared > 0.8:
+        print("Note: The R-squared value is relatively high, indicating a reasonable linear trend over this period.")
+    
+    print("\nDisplaying plot...")
+    # Pass the scalar versions of slope and intercept to the plotting function
+    plot_regression(data_prepared, y, y_pred, TICKER, START_DATE, END_DATE, slope_scalar, intercept_scalar)
+
+if __name__ == '__main__':
+    # This ensures the main function runs only when the script is executed directly
+    # (not when imported as a module)
+    main()
+    print("\nScript finished")
